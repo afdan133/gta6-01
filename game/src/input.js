@@ -1,53 +1,60 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Keyboard + mouse input. Keys are held in a Set of lowercase codes; the mouse position is
+// tracked in canvas (CSS) pixels and converted to world pixels by the main loop. Edge-triggered
+// presses are queued and consumed once per frame so a press between frames is never lost.
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
+const MOVE_CODES = new Set(['keyw', 'keys', 'keya', 'keyd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright']);
+const INTERESTING = new Set([...MOVE_CODES, 'space', 'keye', 'keyf', 'keym', 'f5', 'enter', 'keyq']);
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
+export function createInput(canvas) {
+  const down = new Set();
+  const pressed = new Set();
+  const mouse = { x: 0, y: 0, down: false, clicked: false };
 
-export function createInput(target) {
-  let left = false;
-  let right = false;
-  let actions = 0;
+  function onKey(e, isDown) {
+    const code = e.code.toLowerCase();
+    if (INTERESTING.has(code)) {
+      if (code === 'space' || code === 'f5' || MOVE_CODES.has(code)) e.preventDefault();
+      if (isDown) {
+        if (!down.has(code)) pressed.add(code);
+        down.add(code);
+      } else {
+        down.delete(code);
+      }
+    }
+  }
 
-  window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
-  window.addEventListener('blur', () => {
-    left = false;
-    right = false;
-  });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
-  });
+  const kd = (e) => onKey(e, true);
+  const ku = (e) => onKey(e, false);
+  const mm = (e) => {
+    const r = canvas.getBoundingClientRect();
+    mouse.x = e.clientX - r.left;
+    mouse.y = e.clientY - r.top;
+  };
+  const md = (e) => { mm(e); mouse.down = true; mouse.clicked = true; e.preventDefault(); };
+  const mu = () => { mouse.down = false; };
+  const blur = () => { down.clear(); mouse.down = false; };
+  const ctx = (e) => e.preventDefault();
+
+  window.addEventListener('keydown', kd);
+  window.addEventListener('keyup', ku);
+  window.addEventListener('mousemove', mm);
+  canvas.addEventListener('mousedown', md);
+  window.addEventListener('mouseup', mu);
+  window.addEventListener('blur', blur);
+  canvas.addEventListener('contextmenu', ctx);
 
   return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
+    down,
+    mouse,
+    isDown(code) { return down.has(code.toLowerCase()); },
+    pressed(code) { return pressed.has(code.toLowerCase()); },
+    axes() {
+      const x = (this.isDown('keyd') || this.isDown('arrowright') ? 1 : 0)
+        - (this.isDown('keya') || this.isDown('arrowleft') ? 1 : 0);
+      const y = (this.isDown('keys') || this.isDown('arrowdown') ? 1 : 0)
+        - (this.isDown('keyw') || this.isDown('arrowup') ? 1 : 0);
+      return { x, y };
     },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
-    },
+    consume() { pressed.clear(); mouse.clicked = false; },
   };
 }
