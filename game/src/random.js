@@ -1,5 +1,5 @@
 // Seeded RNG (mulberry32): the whole city and its crowds come from one seed, so a given
-// seed always builds the same city and the same traffic patterns.
+// seed always rebuilds the same city, traffic patterns and street life.
 
 export function createRandom(seed) {
   let s = seed >>> 0;
@@ -12,10 +12,10 @@ export function createRandom(seed) {
   }
   return {
     seed,
-    next,
-    range(a, b) { return a + next() * (b - a); },  // float in [a, b)
+    next,                                            // float in [0, 1)
+    range(a, b) { return a + next() * (b - a); },    // float in [a, b)
     int(a, b) { return Math.floor(a + next() * (b - a + 1)); }, // int in [a, b]
     pick(arr) { return arr[Math.floor(next() * arr.length)]; },
-    chance(p) { return next() < p; },
+    chance(p) { return next() < p; },                // true with probability p
   };
 }

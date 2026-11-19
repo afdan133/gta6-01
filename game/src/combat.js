@@ -1,38 +1,45 @@
 // Combat: weapons (fists, pistol, uzi), mouse aim, bullets, vehicle damage and explosions,
-// floating pickups. Everything is simulated in world pixels; the renderer draws the arrays this
-// module owns. Crimes are reported upward through ctx.onCrime so the police module reacts.
+// pickups, particles and floating text. Everything is simulated in world pixels; the renderer
+// draws the arrays this module owns. Crimes are reported upward through ctx.onCrime so the
+// police module can raise the wanted level.
+//
+// ctx shape (where used): {city, player, peds, cops, cars, onCrime(x, y, kind),
+// onKill(ent), onCarDestroyed(v), onWasted(), shake(amount)}.
 
 import { PLAYER } from './config.js';
 
 const TAU = Math.PI * 2;
 
 export const WEAPONS = {
-  fists:  { name: 'FISTS',  dmg: 10, cooldown: 0.42, range: 24,  spread: 0,    bulletSpeed: 0,   ammoPerShot: 0,  sound: 'punch' },
-  pistol: { name: 'PISTOL', dmg: 24, cooldown: 0.30, range: 700, spread: 0.02, bulletSpeed: 900, ammoPerShot: 1,  sound: 'pistol' },
-  uzi:    { name: 'UZI',    dmg: 11, cooldown: 0.08, range: 560, spread: 0.10, bulletSpeed: 850, ammoPerShot: 1,  sound: 'uzi' },
+  fists:  { name: 'FISTS',  dmg: 10, cooldown: 0.42, range: 24,  spread: 0,    bulletSpeed: 0,   sound: 'punch' },
+  pistol: { name: 'PISTOL', dmg: 24, cooldown: 0.30, range: 700, spread: 0.02, bulletSpeed: 900, sound: 'pistol' },
+  uzi:    { name: 'UZI',    dmg: 11, cooldown: 0.08, range: 560, spread: 0.10, bulletSpeed: 850, sound: 'uzi' },
 };
 
+// Pickups render as a labelled ring; label + colour identify the type.
 export const PICKUP_TYPES = {
-  health:  { color: '#e34f5a', label: '+' },
-  armor:   { color: '#4fa3e3', label: 'A' },
-  pistol:  { color: '#e8d36a', label: 'P' },
-  uzi:     { color: '#c58cf0', label: 'U' },
-  cash:    { color: '#6fc27a', label: '$' },
+  health: { color: '#e34f5a', label: '+' },
+  armor:  { color: '#4fa3e3', label: 'A' },
+  pistol: { color: '#e8d36a', label: 'P' },
+  uzi:    { color: '#c58cf0', label: 'U' },
+  cash:   { color: '#6fc27a', label: '$' },
 };
 
 export function createCombat(audio) {
-  const bullets = [];      // {x, y, vx, vy, life, dmg, owner}
-  const particles = [];    // {x, y, vx, vy, life, max, size, color, grav}
-  const blasts = [];       // {x, y, r, t, max}
-  const flashes = [];      // muzzle flashes {x, y, angle, t}
-  const pickups = [];      // {x, y, type, t, life}
-  const floats = [];       // floating damage/cash text {x, y, text, t, color}
+  const bullets = [];   // {x, y, vx, vy, life, dmg, owner, color}
+  const particles = []; // {x, y, vx, vy, life, max, size, color, grav}
+  const blasts = [];    // explosion rings {x, y, r, t, max}
+  const flashes = [];   // muzzle flashes {x, y, angle, t}
+  const pickups = [];   // {x, y, type, t, life}
+  const floats = [];    // floating text {x, y, text, t, color}
 
+  // ---- loadout -------------------------------------------------------------
+
+  /** Ensure a player object has weapon/ammo fields (safe to call every step). */
   function initLoadout(player) {
     if (player.weapon === undefined) player.weapon = 'fists';
     if (!player.ammo) player.ammo = { pistol: 0, uzi: 0 };
     if (player.fireCooldown === undefined) player.fireCooldown = 0;
-    if (player.meleeCooldown === undefined) player.meleeCooldown = 0;
     player.aimAngle = player.aimAngle ?? 0;
   }
 
@@ -42,6 +49,8 @@ export function createCombat(audio) {
     if (kind === 'uzi') player.ammo.uzi = Math.min(400, player.ammo.uzi + (ammo ?? 120));
   }
 
+  // ---- spawning helpers ------------------------------------------------------
+
   function spawnBullet(o) {
     bullets.push({
       x: o.x, y: o.y,
@@ -49,12 +58,12 @@ export function createCombat(audio) {
       vy: Math.sin(o.angle) * o.speed,
       life: o.life ?? 0.9,
       dmg: o.dmg ?? 10,
-      owner: o.owner ?? 'player',
+      owner: o.owner ?? 'player', // 'player' | 'cop'
       color: o.color ?? '#ffe6a0',
     });
   }
 
-  function addParticles(x, y, n, color, speed, life, size, grav) {
+  function addParticles(x, y, n, color, speed, life, size, grav = 0) {
     for (let i = 0; i < n; i += 1) {
       const a = Math.random() * TAU;
       const s = speed * (0.35 + Math.random() * 0.9);
@@ -66,16 +75,18 @@ export function createCombat(audio) {
         max: life,
         size: size * (0.6 + Math.random() * 0.8),
         color,
-        grav: grav ?? 0,
+        grav, // positive falls, negative rises (smoke)
       });
     }
   }
 
-  function addFloat(x, y, text, color) {
-    floats.push({ x, y, text, t: 1.0, color: color ?? '#ffe9a8' });
+  function addFloat(x, y, text, color = '#ffe9a8') {
+    floats.push({ x, y, text, t: 1.0, color });
   }
 
-  /** Nearest target in front of the player, used by fists. */
+  // ---- firing ------------------------------------------------------------------
+
+  /** Nearest living target roughly in front of the player (fists cone check). */
   function meleeTarget(player, angle, targets) {
     let best = null;
     let bestD = WEAPONS.fists.range * WEAPONS.fists.range;
@@ -86,7 +97,7 @@ export function createCombat(audio) {
       const d = dx * dx + dy * dy;
       if (d > bestD) continue;
       const dot = (dx * Math.cos(angle) + dy * Math.sin(angle)) / (Math.sqrt(d) || 1);
-      if (dot < 0.2) continue;
+      if (dot < 0.2) continue; // outside the punch cone
       bestD = d;
       best = t;
     }
@@ -94,8 +105,8 @@ export function createCombat(audio) {
   }
 
   /**
-   * Player fires at world point `aim`. ctx: {city, peds, cops, cars, onCrime(x, y, kind)}.
-   * Returns {fired, empty}.
+   * Player fires at the world point `aim`. Returns {fired, empty} — `empty` means the gun
+   * clicked dry and the player was switched back to fists.
    */
   function fire(player, aim, ctx) {
     if (player.fireCooldown > 0) return { fired: false };
@@ -105,8 +116,7 @@ export function createCombat(audio) {
 
     if (player.weapon === 'fists') {
       player.fireCooldown = w.cooldown;
-      const targets = [...(ctx.peds || []), ...(ctx.cops || [])];
-      const t = meleeTarget(player, angle, targets);
+      const t = meleeTarget(player, angle, [...(ctx.peds || []), ...(ctx.cops || [])]);
       addParticles(player.x + Math.cos(angle) * 16, player.y + Math.sin(angle) * 16, 4, '#f5e9d0', 90, 0.2, 2);
       if (t) {
         hurtEntity(t, w.dmg, ctx);
@@ -115,6 +125,7 @@ export function createCombat(audio) {
       return { fired: true };
     }
 
+    // Guns: consume ammo, spawn one spread bullet from the muzzle.
     if (player.ammo[player.weapon] <= 0) {
       player.weapon = 'fists';
       return { fired: false, empty: true };
@@ -136,6 +147,8 @@ export function createCombat(audio) {
     return { fired: true };
   }
 
+  // ---- damage ------------------------------------------------------------------
+
   function hurtEntity(ent, dmg, ctx) {
     ent.health = (ent.health ?? 40) - dmg;
     if (ent.onHurt) ent.onHurt(dmg);
@@ -156,22 +169,23 @@ export function createCombat(audio) {
   function damageVehicle(v, dmg, ctx) {
     if (v.exploded) return;
     v.health -= dmg;
-    if (v.health <= 30) addParticles(v.x, v.y, 1, '#4a4a4a', 20, 0.9, 3, -20);
+    if (v.health <= 30) addParticles(v.x, v.y, 1, '#4a4a4a', 20, 0.9, 3, -20); // smoke
     if (v.health <= 0) explode(v, ctx);
   }
 
-  /** Blow a car up: fire particles, blast ring, shake, damage nearby entities. */
+  /** Blow a car up: blast ring, fire + smoke particles, shake, area damage. */
   function explode(v, ctx) {
     if (v.exploded) return;
     v.exploded = true;
     v.health = 0;
     blasts.push({ x: v.x, y: v.y, r: 6, t: 0.7, max: 0.7 });
-    addParticles(v.x, v.y, 26, '#ff9a3c', 210, 0.9, 4, 30);
-    addParticles(v.x, v.y, 16, '#ffe27a', 140, 0.6, 3, 10);
-    addParticles(v.x, v.y, 14, '#3a3a42', 90, 1.5, 5, -25);
+    addParticles(v.x, v.y, 26, '#ff9a3c', 210, 0.9, 4, 30);   // fire
+    addParticles(v.x, v.y, 16, '#ffe27a', 140, 0.6, 3, 10);   // sparks
+    addParticles(v.x, v.y, 14, '#3a3a42', 90, 1.5, 5, -25);   // smoke
     if (audio) audio.explosion();
     if (ctx.shake) ctx.shake(11);
-    // Blast damage.
+
+    // Area damage to everyone nearby.
     const R = 90;
     for (const e of [...(ctx.peds || []), ...(ctx.cops || [])]) {
       if (e.dead) continue;
@@ -185,6 +199,7 @@ export function createCombat(audio) {
     if (ctx.onCarDestroyed) ctx.onCarDestroyed(v);
   }
 
+  /** Armor soaks 60% of incoming damage until it breaks. */
   function damagePlayer(player, dmg, ctx) {
     if (player.dead) return;
     let left = dmg;
@@ -202,45 +217,46 @@ export function createCombat(audio) {
     }
   }
 
-  /** Drop a pickup at world point. */
+  // ---- pickups ------------------------------------------------------------------
+
   function addPickup(x, y, type) {
     pickups.push({ x, y, type, t: 0, life: 90 });
   }
 
-  /** Keep a handful of pickups alive around the player (called about once a second). */
+  /** Keep a handful of pickups alive near the player (called about once a second). */
   function ensurePickups(city, player, rng) {
-    const alive = pickups.filter((p) => p.life > 0);
-    if (alive.length >= 7) return;
+    if (pickups.filter((p) => p.life > 0).length >= 7) return;
     for (let i = 0; i < 12; i += 1) {
       const a = rng.range(0, TAU);
       const d = rng.range(160, 520);
       const x = player.x + Math.cos(a) * d;
       const y = player.y + Math.sin(a) * d;
-      if (city.tileAt(x, y) === 1) continue; // not in the middle of a road
+      if (city.isRoad(x, y)) continue;                 // not in the middle of the street
       if (city.solidAt(x, y) || city.pointInBuilding(x, y)) continue;
       const roll = rng.next();
       const type = roll < 0.24 ? 'health' : roll < 0.42 ? 'armor' : roll < 0.58 ? 'pistol' : roll < 0.8 ? 'cash' : 'uzi';
       addPickup(x, y, type);
-      return;
+      return; // one per tick keeps the streets from littering
     }
   }
 
-  /** Move bullets, resolve hits, tick particles, collect pickups. */
+  // ---- per-step update ------------------------------------------------------------
+
+  /** Move bullets, resolve hits, tick particles/blasts/flashes/floats, collect pickups. */
   function update(dt, ctx) {
     const { city, player, peds, cops, cars } = ctx;
 
-    // --- bullets ---------------------------------------------------------
+    // Bullets: sub-stepped so fast rounds can't tunnel through thin targets.
     for (let i = bullets.length - 1; i >= 0; i -= 1) {
       const b = bullets[i];
       b.life -= dt;
-      const steps = 2; // sub-step so fast bullets don't tunnel through thin targets
       let dead = b.life <= 0;
-      for (let s = 0; s < steps && !dead; s += 1) {
-        b.x += (b.vx * dt) / steps;
-        b.y += (b.vy * dt) / steps;
+      for (let s = 0; s < 2 && !dead; s += 1) {
+        b.x += (b.vx * dt) / 2;
+        b.y += (b.vy * dt) / 2;
         if (b.x < 0 || b.y < 0 || b.x > city.worldSize().w || b.y > city.worldSize().h) { dead = true; break; }
         if (city.solidAt(b.x, b.y) || city.pointInBuilding(b.x, b.y)) {
-          addParticles(b.x, b.y, 3, '#d8d2c0', 55, 0.18, 1.6);
+          addParticles(b.x, b.y, 3, '#d8d2c0', 55, 0.18, 1.6); // wall dust
           dead = true;
           break;
         }
@@ -255,13 +271,14 @@ export function createCombat(audio) {
             if (Math.hypot(p.x - b.x, p.y - b.y) < 7) { hurtEntity(p, b.dmg, ctx); dead = true; break; }
           }
           if (dead) break;
-        } else if (player && !player.dead) {
-          if (Math.hypot(player.x - b.x, player.y - b.y) < PLAYER.radius + 2 && !player.inVehicle) {
+        } else if (player && !player.dead && !player.inVehicle) {
+          if (Math.hypot(player.x - b.x, player.y - b.y) < PLAYER.radius + 2) {
             damagePlayer(player, b.dmg, ctx);
             dead = true;
             break;
           }
         }
+        // Bullets also hit cars (and occupants take splash when the player is driving).
         for (const v of cars) {
           if (v.exploded) continue;
           if (Math.hypot(v.x - b.x, v.y - b.y) < 16) {
@@ -275,7 +292,7 @@ export function createCombat(audio) {
       if (dead) bullets.splice(i, 1);
     }
 
-    // --- particles / blasts / flashes / floats ---------------------------
+    // Particles: gravity + drag.
     for (let i = particles.length - 1; i >= 0; i -= 1) {
       const p = particles[i];
       p.life -= dt;
@@ -286,31 +303,34 @@ export function createCombat(audio) {
       p.vy *= 1 - 1.6 * dt;
       if (p.life <= 0) particles.splice(i, 1);
     }
+
+    // Explosion rings expand and fade.
     for (let i = blasts.length - 1; i >= 0; i -= 1) {
       const b = blasts[i];
       b.t -= dt;
       b.r += dt * 130;
       if (b.t <= 0) blasts.splice(i, 1);
     }
+
     for (let i = flashes.length - 1; i >= 0; i -= 1) {
       flashes[i].t -= dt;
       if (flashes[i].t <= 0) flashes.splice(i, 1);
     }
+
     for (let i = floats.length - 1; i >= 0; i -= 1) {
       floats[i].t -= dt;
       floats[i].y -= dt * 26;
       if (floats[i].t <= 0) floats.splice(i, 1);
     }
 
-    // --- pickups ---------------------------------------------------------
+    // Pickups: age out, then collect on contact.
     for (let i = pickups.length - 1; i >= 0; i -= 1) {
       const p = pickups[i];
       p.t += dt;
       p.life -= dt;
       if (p.life <= 0) { pickups.splice(i, 1); continue; }
       if (player.dead) continue;
-      const d = Math.hypot(player.x - p.x, player.y - p.y);
-      if (d > 18) continue;
+      if (Math.hypot(player.x - p.x, player.y - p.y) > 18) continue;
       pickups.splice(i, 1);
       if (audio) audio.pickup();
       if (p.type === 'health') {
@@ -331,17 +351,15 @@ export function createCombat(audio) {
       }
     }
 
-    // --- car vs car crashes ---------------------------------------------
-    if (ctx.crashCooldown !== undefined) ctx.crashCooldown -= dt;
+    // Car-vs-car crashes: fast cars clip each other, both take damage and spark.
     for (let i = 0; i < cars.length; i += 1) {
       const a = cars[i];
       if (a.exploded || Math.abs(a.speed) < 150) continue;
+      if (a.crashCd > 0) { a.crashCd -= dt; continue; }
       for (let j = i + 1; j < cars.length; j += 1) {
         const b = cars[j];
         if (b.exploded) continue;
-        if (a.crashCd > 0) break;
-        const d = Math.hypot(a.x - b.x, a.y - b.y);
-        if (d > 26) continue;
+        if (Math.hypot(a.x - b.x, a.y - b.y) > 26) continue;
         damageVehicle(a, 6 + Math.abs(a.speed) * 0.05, ctx);
         damageVehicle(b, 6 + Math.abs(a.speed) * 0.06, ctx);
         a.crashCd = 0.5;
@@ -350,11 +368,10 @@ export function createCombat(audio) {
         if (audio) audio.crash();
         break;
       }
-      if (a.crashCd > 0) a.crashCd -= dt;
     }
   }
 
-  /** Skid/impact smoke for a handbraking car. */
+  /** Skid/impact smoke puff for a handbraking car. */
   function tireSmoke(v) {
     if (Math.random() < 0.35) addParticles(v.x, v.y, 1, 'rgba(220,210,190,0.7)', 20, 0.6, 3, -14);
   }

@@ -1,29 +1,37 @@
-// Audio: every sound is synthesized with WebAudio — no files, no network. An engine loop whose
-// pitch tracks vehicle speed, a police siren two-tone, gunshots, explosions, a pickup blip and a
-// mission-complete jingle. Everything runs through one master gain so M can mute the game.
+// Audio: every sound is synthesized with WebAudio — no files, no network.
+//
+// Loops: an engine whose pitch tracks vehicle speed, and a two-tone police siren (a square
+// oscillator wobbled by an LFO). One-shots: gunshots and crashes (filtered noise bursts),
+// explosions, pickup blips, hurt grunts, and the mission jingle/fail stingers.
+// Everything runs through one master gain so M mutes the whole game. Without WebAudio
+// (headless smoke tests, old browsers) every call degrades to a no-op.
+
+const MASTER_VOLUME = 0.8;
 
 export function createAudio() {
   let ctx = null;
   let master = null;
   let muted = false;
 
-  // Engine loop: sawtooth oscillator + lowpass; frequency and gain set per frame.
+  // Engine loop: sawtooth through a lowpass; frequency and gain set per frame.
   let engineOsc = null;
   let engineGain = null;
   let engineFilter = null;
-  // Siren: a square oscillator whose frequency wobbles between two tones.
+
+  // Siren: square oscillator + sine LFO wobbling its frequency between two tones.
   let sirenOsc = null;
   let sirenGain = null;
   let sirenLfo = null;
   let sirenLfoGain = null;
 
+  /** Build the audio graph on first use; returns false when WebAudio is unavailable. */
   function ensure() {
     if (ctx) return true;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return false;
     ctx = new AC();
     master = ctx.createGain();
-    master.gain.value = muted ? 0 : 0.8;
+    master.gain.value = muted ? 0 : MASTER_VOLUME;
     master.connect(ctx.destination);
 
     engineOsc = ctx.createOscillator();
@@ -54,7 +62,7 @@ export function createAudio() {
     return true;
   }
 
-  /** Called once on the first user gesture so the AudioContext is allowed to start. */
+  /** Call once on the first user gesture — browsers only allow audio after interaction. */
   function unlock() {
     if (!ensure()) return;
     if (ctx.state === 'suspended') ctx.resume();
@@ -62,19 +70,19 @@ export function createAudio() {
 
   function setMuted(m) {
     muted = m;
-    if (master) master.gain.value = muted ? 0 : 0.8;
+    if (master) master.gain.value = muted ? 0 : MASTER_VOLUME;
   }
 
-  /** Engine loop update: speed01 in [0,1], on = driving. */
+  /** Engine loop: speed01 in [0, 1]; `on` true while driving. */
   function engine(speed01, on) {
     if (!ctx) return;
     const t = ctx.currentTime;
-    const f = 55 + speed01 * 130 + Math.sin(t * 30) * 3;
+    const f = 55 + speed01 * 130 + Math.sin(t * 30) * 3; // slight growl
     engineOsc.frequency.setTargetAtTime(f, t, 0.05);
     engineGain.gain.setTargetAtTime(on ? 0.05 + speed01 * 0.06 : 0, t, 0.08);
   }
 
-  /** Siren: on while wanted > 0. */
+  /** Siren: on while the player is wanted and units are in play. */
   function siren(on) {
     if (!ctx) return;
     const t = ctx.currentTime;
@@ -82,6 +90,7 @@ export function createAudio() {
     sirenLfo.frequency.setTargetAtTime(on ? 1.6 : 0.2, t, 0.2);
   }
 
+  /** Short tonal blip, optionally sliding down to `slide` Hz. */
   function blip(freq, dur, type, vol, slide) {
     if (!ctx) return;
     const t = ctx.currentTime;
@@ -97,6 +106,7 @@ export function createAudio() {
     o.stop(t + dur + 0.02);
   }
 
+  /** Decaying white-noise burst through a lowpass — gunshots, crashes, explosions. */
   function noiseBurst(dur, vol, filterFreq) {
     if (!ctx) return;
     const t = ctx.currentTime;
@@ -129,15 +139,19 @@ export function createAudio() {
   function hurt() { blip(200, 0.12, 'sawtooth', 0.2, 90); }
   function crash() { noiseBurst(0.15, 0.3, 800); }
 
+  /** Rising triangle stinger: mission complete / game start. */
   function jingle() {
-    const notes = [523, 659, 784, 1047];
-    notes.forEach((n, i) => setTimeout(() => blip(n, 0.18, 'triangle', 0.2), i * 120));
+    [523, 659, 784, 1047].forEach((n, i) => setTimeout(() => blip(n, 0.18, 'triangle', 0.2), i * 120));
   }
 
+  /** Falling stinger: wasted, busted, mission failed. */
   function fail() {
-    const notes = [392, 330, 262];
-    notes.forEach((n, i) => setTimeout(() => blip(n, 0.25, 'triangle', 0.2), i * 160));
+    [392, 330, 262].forEach((n, i) => setTimeout(() => blip(n, 0.25, 'triangle', 0.2), i * 160));
   }
 
-  return { unlock, setMuted, get muted() { return muted; }, engine, siren, gunshot, explosion, pickup, hurt, crash, jingle, fail };
+  return {
+    unlock, setMuted,
+    get muted() { return muted; },
+    engine, siren, gunshot, explosion, pickup, hurt, crash, jingle, fail,
+  };
 }

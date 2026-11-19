@@ -1,12 +1,14 @@
 // Save: localStorage persistence of the run — player stats, mission progress, day time and
-// settings. Auto-saves every ~10 s and after mission events; F5 loads, F9 saves on demand.
-// The mute flag travels with the save so sound settings survive reloads.
+// settings. Auto-saves every ~10 s while playing; F5 saves and Q/F9 load on demand (see main.js).
+// The mute flag travels with the save so sound settings survive reloads. All storage access is
+// guarded: private-mode browsers and quota errors degrade to "save failed", never a crash.
 
 const KEY = 'sunset-city-save-v1';
 
 export function createSaveSystem() {
   let autoTimer = 0;
 
+  /** Snapshot the current run into a plain JSON object. */
   function capture(game) {
     return {
       v: 1,
@@ -45,7 +47,7 @@ export function createSaveSystem() {
       const raw = localStorage.getItem(KEY);
       if (!raw) return null;
       const data = JSON.parse(raw);
-      if (!data || data.v !== 1) return null;
+      if (!data || data.v !== 1) return null; // unknown version: ignore
       return data;
     } catch {
       return null;
@@ -54,6 +56,7 @@ export function createSaveSystem() {
 
   function hasSave() { return load() !== null; }
 
+  /** Apply a loaded snapshot to the live game (positions, stats, missions, settings). */
   function apply(data, game) {
     if (!data) return false;
     game.player.x = data.player.x;
@@ -68,7 +71,7 @@ export function createSaveSystem() {
     game.missionState.unlockedDistricts = [...(data.missions.unlockedDistricts || [])];
     game.dayT = data.dayT;
     if (game.audio && typeof data.muted === 'boolean') game.audio.setMuted(data.muted);
-    game.camera.x = game.player.x;
+    game.camera.x = game.player.x; // snap the camera so we don't glide across the map
     game.camera.y = game.player.y;
     return true;
   }
@@ -86,6 +89,7 @@ export function createSaveSystem() {
     }
   }
 
+  /** Save immediately after mission milestones so progress can't be lost. */
   function onMissionEvent(game) { save(game); }
 
   return { save, load, apply, hasSave, clear, tick, onMissionEvent, capture };
