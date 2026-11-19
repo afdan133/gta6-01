@@ -1,166 +1,173 @@
-// Entities: the player (on foot + driving), pedestrians, and the shared arcade vehicle physics
-// used by everything on wheels. Movement resolves circle-vs-building collision against the city;
-// vehicles use forward accel, lateral grip damping, and drift while the handbrake is held.
+// Actors and physics.
+//
+// The player (walking or driving), pedestrians, and one arcade vehicle model shared by
+// everything with wheels. Foot movement resolves as a circle against buildings and water;
+// cars accelerate forward, bleed lateral velocity as grip, and drift with the handbrake.
 
-import { PED, PLAYER, TILE, VEHICLE, WORLD_H, WORLD_W } from './config.js';
+import { PED, PLAYER, VEHICLE, WORLD_H, WORLD_W } from './config.js';
 import { T_WATER } from './city.js';
-
-const TAU = Math.PI * 2;
-
-export function wrapAngle(a) {
-  while (a > Math.PI) a -= TAU;
-  while (a < -Math.PI) a += TAU;
-  return a;
-}
 
 export function createPlayer(x, y) {
   return {
     x, y,
     angle: 0,
-    vx: 0, vy: 0,
+    vx: 0,
+    vy: 0,
+    walkAngle: 0,
     health: PLAYER.maxHealth,
     armor: 0,
     cash: 250,
-    inVehicle: null,   // vehicle object while driving
-    walkAngle: 0,
-    wanted: 0,
+    inVehicle: null,
+    weapon: 'fists',
+    fireCooldown: 0,
+    wantedHeat: 0,
+    lastCrimeT: -999,
+    wasted: false,
   };
 }
 
-export function createPed(x, y, rng, shirtList, pantsList) {
+export function createPed(x, y, rng, shirts, pants) {
   return {
     x, y,
-    angle: rng.range(0, TAU),
-    shirt: rng.pick(shirtList),
-    pants: rng.pick(pantsList),
-    vx: 0, vy: 0,
-    state: 'walk',          // walk | flee
-    timer: rng.range(1, 4), // seconds until the next wander decision
-    targetAngle: 0,
+    angle: rng.angle(),
+    heading: rng.angle(),
+    vx: 0,
+    vy: 0,
+    shirt: rng.pick(shirts),
+    pants: rng.pick(pants),
+    mode: 'stroll',
+    think: rng.range(1.2, 4),
     alive: true,
   };
 }
 
-export function createVehicle(x, y, angle, rng, colorList, kind = 'parked') {
+export function createVehicle(x, y, angle, rng, colors, role = 'parked') {
   return {
     x, y, angle,
-    vx: 0, vy: 0,        // velocity in world axes
-    speed: 0,            // signed forward speed
-    color: rng.pick(colorList),
-    kind,                // parked | traffic | police
-    driver: null,        // 'player' or null (mission tags set extra fields)
+    vx: 0,
+    vy: 0,
+    speed: 0,
+    lat: 0,
+    color: rng.pick(colors),
+    role,
+    driver: null,
     health: 100,
-    stopTimer: 0,        // intersection pause countdown
-    laneAxis: null,      // 'h' | 'v' for traffic cars
-    dir: 1,              // lane direction along the axis
-    hornTimer: 0,
+    junctionTimer: 0,
+    laneAxis: null,
+    laneDir: 1,
+    siren: 0,
+    exploded: false,
   };
 }
 
-/**
- * Push a circle (player, ped) out of buildings and water.
- * Samples 8 points on the rim and nudges the entity back along each blocked direction.
- * Returns true when any contact happened.
- */
-function collideCircle(city, ent, radius) {
-  let hit = false;
-  const blocked = (px, py) => {
-    if (city.solidAt(px, py)) return true;
-    const b = city.pointInBuilding(px, py);
-    return !!(b && b.height > 0);
-  };
+// ---- collision ---------------------------------------------------------------
+
+const TAU = Math.PI * 2;
+
+function probeBlocked(city, px, py) {
+  if (city.solidAt(px, py)) return true;
+  const b = city.pointInBuilding(px, py);
+  return !!b;
+}
+
+/** Push a circle out of walls/water by probing its rim; true when it touched anything. */
+function settleCircle(city, ent, r) {
+  let touched = false;
   for (let i = 0; i < 8; i += 1) {
     const a = (i / 8) * TAU;
-    const px = ent.x + Math.cos(a) * radius;
-    const py = ent.y + Math.sin(a) * radius;
-    if (!blocked(px, py)) continue;
-    hit = true;
-    // Back off toward the centre until this probe is free (bounded, so no infinite loops).
-    for (let s = 0; s < 6 && blocked(px, py); s += 1) {
-      ent.x += Math.cos(a + Math.PI) * 2;
-      ent.y += Math.sin(a + Math.PI) * 2;
+    const px = ent.x + Math.cos(a) * r;
+    const py = ent.y + Math.sin(a) * r;
+    if (!probeBlocked(city, px, py)) continue;
+    touched = true;
+    const back = a + Math.PI;
+    for (let s = 0; s < 6 && probeBlocked(city, px, py); s += 1) {
+      ent.x += Math.cos(back) * 2;
+      ent.y += Math.sin(back) * 2;
     }
   }
-  ent.x = Math.max(radius, Math.min(WORLD_W - radius, ent.x));
-  ent.y = Math.max(radius, Math.min(WORLD_H - radius, ent.y));
-  return hit;
+  ent.x = Math.min(Math.max(ent.x, r), WORLD_W - r);
+  ent.y = Math.min(Math.max(ent.y, r), WORLD_H - r);
+  return touched;
 }
 
+// ---- vehicles ----------------------------------------------------------------
+
 /**
- * Shared vehicle physics. throttle in [-1, 1] (positive = gas), steer in [-1, 1],
- * handbrake boolean (drift). Returns true when the car bumped something this step.
+ * Advance one car. throttle [-1..1], steer [-1..1], handbrake bool.
+ * Returns true when the car hit a wall this step.
  */
 export function updateVehicle(v, throttle, steer, handbrake, dt, city) {
-  // Longitudinal: accel, brake-to-reverse, or coast with engine drag.
   if (throttle > 0) {
     v.speed += VEHICLE.accel * throttle * dt;
   } else if (throttle < 0) {
-    v.speed += (v.speed > 0 ? -VEHICLE.brake : VEHICLE.reverseAccel) * throttle * dt;
+    const k = v.speed > 0 ? VEHICLE.brake : VEHICLE.reverseAccel;
+    v.speed += k * throttle * dt;
   } else {
-    v.speed -= v.speed * 1.4 * dt; // rolling friction
+    v.speed -= v.speed * 1.4 * dt;
   }
   v.speed = Math.max(-VEHICLE.maxReverse, Math.min(VEHICLE.maxSpeed, v.speed));
 
-  // Steering authority fades in with speed so stationary cars don't pirouette.
-  const steerEff = steer * VEHICLE.turnRate * Math.min(1, Math.abs(v.speed) / 90);
-  v.angle = wrapAngle(v.angle + steerEff * dt * Math.sign(v.speed || 1));
+  // Steering authority scales with speed so parked cars cannot spin in place.
+  const authority = Math.min(1, Math.abs(v.speed) / 90);
+  const swing = steer * VEHICLE.turnRate * authority;
+  v.angle += swing * dt * (v.speed >= 0 ? 1 : -1);
+  if (v.angle > Math.PI) v.angle -= TAU;
+  if (v.angle < -Math.PI) v.angle += TAU;
 
-  // Velocity is forward along the facing plus a lateral slip term. Handbraking injects slip
-  // from the steering input and bleeds it off slowly, which reads as a drift.
   const fx = Math.cos(v.angle);
   const fy = Math.sin(v.angle);
-  v.lat = (v.lat || 0) + (handbrake ? steerEff * v.speed * dt * 0.9 : 0);
-  v.lat -= v.lat * (handbrake ? VEHICLE.handbrakeGrip : VEHICLE.driftGrip) * dt;
-  const oldVx = fx * v.speed - fy * v.lat;
-  const oldVy = fy * v.speed + fx * v.lat;
-  v.vx = oldVx;
-  v.vy = oldVy;
+  // Lateral slip: handbrake injects it (the drift), grip drains it.
+  v.lat += handbrake ? swing * v.speed * dt * 0.9 : 0;
+  v.lat -= v.lat * (handbrake ? VEHICLE.handbrakeGrip : VEHICLE.grip) * dt;
 
+  v.vx = fx * v.speed - fy * v.lat;
+  v.vy = fy * v.speed + fx * v.lat;
   v.x += v.vx * dt;
   v.y += v.vy * dt;
 
-  // Collision: probe the four bounding corners; on a hit, kill most of the speed and back out.
-  const hx = Math.abs(fx) * VEHICLE.length / 2 + Math.abs(fy) * VEHICLE.width / 2;
-  const hy = Math.abs(fy) * VEHICLE.length / 2 + Math.abs(fx) * VEHICLE.width / 2;
-  let bumped = false;
-  const corners = [
-    [v.x - hx, v.y - hy], [v.x + hx, v.y - hy],
-    [v.x - hx, v.y + hy], [v.x + hx, v.y + hy],
-  ];
-  for (const [cx, cy] of corners) {
-    if (city.solidAt(cx, cy) || city.pointInBuilding(cx, cy)) { bumped = true; break; }
+  // Probe the four corners of the oriented box.
+  const hx = Math.abs(fx) * (VEHICLE.length / 2) + Math.abs(fy) * (VEHICLE.width / 2);
+  const hy = Math.abs(fy) * (VEHICLE.length / 2) + Math.abs(fx) * (VEHICLE.width / 2);
+  let crash = false;
+  if (
+    probeBlocked(city, v.x - hx, v.y - hy) || probeBlocked(city, v.x + hx, v.y - hy) ||
+    probeBlocked(city, v.x - hx, v.y + hy) || probeBlocked(city, v.x + hx, v.y + hy)
+  ) crash = true;
+
+  if (crash) {
+    v.speed *= -0.25;
+    v.lat *= 0.4;
+    v.x -= v.vx * dt * 1.5;
+    v.y -= v.vy * dt * 1.5;
   }
-  if (bumped) {
-    v.speed *= -0.25;              // small rebound
-    v.x -= oldVx * dt * 1.5;       // undo most of this step's motion
-    v.y -= oldVy * dt * 1.5;
-  }
-  v.x = Math.max(VEHICLE.length / 2, Math.min(WORLD_W - VEHICLE.length / 2, v.x));
-  v.y = Math.max(VEHICLE.length / 2, Math.min(WORLD_H - VEHICLE.length / 2, v.y));
-  return bumped;
+  const half = VEHICLE.length / 2;
+  v.x = Math.min(Math.max(v.x, half), WORLD_W - half);
+  v.y = Math.min(Math.max(v.y, half), WORLD_H - half);
+  return crash;
 }
 
-/** Player update: on foot or driving. Returns events such as 'enterVehicle' / 'exitVehicle'. */
-export function updatePlayer(player, input, city, dt, vehicles) {
+// ---- player ------------------------------------------------------------------
+
+export function updatePlayer(p, input, city, dt, cars) {
   const events = [];
 
-  if (player.inVehicle) {
-    const v = player.inVehicle;
+  if (p.inVehicle) {
+    const v = p.inVehicle;
     const ax = input.axes();
-    updateVehicle(v, -ax.y, ax.x, input.isDown('space'), dt, city); // W = forward
-    player.x = v.x;
-    player.y = v.y;
-    player.angle = v.angle;
-    if (input.pressed('keye') || input.pressed('keyf')) {
-      // Exit: step out beside the car.
+    updateVehicle(v, -ax.y, ax.x, input.isDown('space'), dt, city);
+    p.x = v.x;
+    p.y = v.y;
+    p.angle = v.angle;
+    if (input.wasPressed('keye') || input.wasPressed('keyf')) {
       v.driver = null;
-      player.inVehicle = null;
+      p.inVehicle = null;
+      // Step out on the left side, clear of the body.
       const side = v.angle + Math.PI / 2;
-      const out = VEHICLE.width + PLAYER.radius + 2;
-      player.x = v.x + Math.cos(side) * out;
-      player.y = v.y + Math.sin(side) * out;
-      player.vx = 0;
-      player.vy = 0;
+      const out = VEHICLE.width + PLAYER.radius + 3;
+      p.x = v.x + Math.cos(side) * out;
+      p.y = v.y + Math.sin(side) * out;
+      p.vx = 0;
+      p.vy = 0;
       events.push('exitVehicle');
     }
     return events;
@@ -168,81 +175,83 @@ export function updatePlayer(player, input, city, dt, vehicles) {
 
   // On foot.
   const ax = input.axes();
-  const speed = input.running() ? PLAYER.runSpeed : PLAYER.walkSpeed;
+  const speed = input.sprinting() ? PLAYER.run : PLAYER.walk;
   let dx = ax.x;
   let dy = ax.y;
   const len = Math.hypot(dx, dy);
   if (len > 0) {
     dx /= len;
     dy /= len;
-    player.walkAngle = Math.atan2(dy, dx);
+    p.walkAngle = Math.atan2(dy, dx);
   }
-  player.x += dx * speed * dt;
-  player.y += dy * speed * dt;
-  collideCircle(city, player, PLAYER.radius);
-  player.angle = player.walkAngle;
-  player.vx = dx * speed;
-  player.vy = dy * speed;
+  p.x += dx * speed * dt;
+  p.y += dy * speed * dt;
+  settleCircle(city, p, PLAYER.radius);
+  p.angle = p.walkAngle;
+  p.vx = dx * speed;
+  p.vy = dy * speed;
 
-  if (input.pressed('keye') || input.pressed('keyf')) {
-    // Enter the nearest vehicle within reach.
-    const reach = 55 * 55;
+  if (input.wasPressed('keye') || input.wasPressed('keyf')) {
+    // Jack the closest car within arm's reach.
     let best = null;
-    let bestD = reach;
-    for (const v of vehicles) {
-      const d = (v.x - player.x) ** 2 + (v.y - player.y) ** 2;
-      if (d < bestD) { bestD = d; best = v; }
+    let bestD = 55 * 55;
+    for (const c of cars) {
+      if (c.exploded) continue;
+      const d = (c.x - p.x) * (c.x - p.x) + (c.y - p.y) * (c.y - p.y);
+      if (d < bestD) {
+        bestD = d;
+        best = c;
+      }
     }
     if (best) {
-      player.inVehicle = best;
+      p.inVehicle = best;
       best.driver = 'player';
-      player.x = best.x;
-      player.y = best.y;
+      p.x = best.x;
+      p.y = best.y;
       events.push('enterVehicle');
     }
   }
   return events;
 }
 
-/**
- * One pedestrian. Walks until its timer expires, picks a new heading, and when `panic`
- * ({x, y}) is nearby it flees away from the panic point, sliding along walls.
- */
-export function updatePed(p, city, dt, panic) {
-  p.timer -= dt;
+// ---- pedestrians ---------------------------------------------------------------
 
-  if (p.state === 'flee') {
-    if (p.timer <= 0 || !panic) {
-      // Panic passed (or the run is over): settle back into a walk.
-      p.state = 'walk';
-      p.timer = 1 + Math.random() * 3;
+/**
+ * One citizen. Strolls between random headings; when `panic` (a point) is close it sprints
+ * away from it, sliding along walls, then settles back down once the threat passes.
+ */
+export function updatePed(ped, city, dt, panic) {
+  ped.think -= dt;
+
+  if (ped.mode === 'panic') {
+    if (!panic || ped.think <= 0) {
+      ped.mode = 'stroll';
+      ped.think = 1 + Math.random() * 3;
       return;
     }
-    const away = Math.atan2(p.y - panic.y, p.x - panic.x);
-    p.targetAngle = away;
-    p.angle = wrapAngle(away);
-    p.x += Math.cos(away) * PED.fleeSpeed * dt;
-    p.y += Math.sin(away) * PED.fleeSpeed * dt;
-    if (collideCircle(city, p, PED.radius)) {
-      // Blocked: slide along the wall at a tangent.
-      p.targetAngle += Math.PI / 3;
+    const away = Math.atan2(ped.y - panic.y, ped.x - panic.x);
+    ped.heading = away;
+    ped.angle = away;
+    ped.x += Math.cos(away) * PED.fleeSpeed * dt;
+    ped.y += Math.sin(away) * PED.fleeSpeed * dt;
+    if (settleCircle(city, ped, PED.radius)) {
+      ped.heading += Math.PI / 3; // skid along the wall
     }
     return;
   }
 
-  if (p.timer <= 0) {
-    p.timer = Math.random() * 3 + 1.5;
-    p.targetAngle = Math.random() * TAU;
+  if (ped.think <= 0) {
+    ped.think = 1.5 + Math.random() * 3;
+    ped.heading = Math.random() * TAU;
   }
-  const nx = p.x + Math.cos(p.targetAngle) * PED.speed * dt;
-  const ny = p.y + Math.sin(p.targetAngle) * PED.speed * dt;
+  const nx = ped.x + Math.cos(ped.heading) * PED.speed * dt;
+  const ny = ped.y + Math.sin(ped.heading) * PED.speed * dt;
   if (city.tileAt(nx, ny) === T_WATER) {
-    // Turn away from the water instead of walking into it.
-    p.targetAngle += Math.PI * (0.6 + Math.random() * 0.8);
+    ped.heading += Math.PI * (0.6 + Math.random() * 0.8); // refuse to swim
   } else {
-    p.x = nx;
-    p.y = ny;
+    ped.x = nx;
+    ped.y = ny;
   }
-  p.angle = wrapAngle(p.targetAngle);
-  if (city.solidAt(p.x, p.y)) collideCircle(city, p, PED.radius);
+  ped.angle = ped.heading;
+  if (city.solidAt(ped.x, ped.y)) settleCircle(city, ped, PED.radius);
 }

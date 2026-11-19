@@ -1,31 +1,29 @@
-// Missions: the story of Sunset City — eight missions from small errands to the finale.
+// The story mode: eight missions, one giver marker each, escalating from errands to the finale.
 //
-// Each mission has a giver marker on the map, an intro quote, a sequence of objectives, and a
-// cash reward (some unlock districts). Completing one unlocks the next; when all eight are done
-// the game reaches its "complete" ending state.
-//
-// Objective types understood by updateMissions():
-//   goto         walk/drive into pos within radius
-//   gotoVehicle  be inside any car
-//   stealCar     get into the mission's marked car
-//   destroyCars  destroy `count` mission-tagged cars
-//   survive      reach wanted 0
-//   escort       drive the mission van to pos without it exploding
-//   ramCar       damage the courier car below the stop threshold
+// Missions are pure data (see MISSIONS below); a tiny interpreter in updateMissions() walks
+// their objective lists. Objective kinds:
+//   goto        — reach a world position
+//   gotoVehicle — be behind the wheel
+//   stealCar    — get into the mission's marked car
+//   destroyCars — blow up N tagged cars
+//   survive     — let the wanted level cool back to zero
+//   escort      — drive the mission van to a point without wrecking it
+//   ramCar      — batter a courier car until it stops running
 
-const TILE_PX = 24; // matches config.TILE; kept local to avoid a config import in story data
+import { GIVER_TILE, TILE } from './config.js';
 
-// Story characters (all original).
-const CAST = {
-  fixer: 'Marisol Vega',    // the fixer who runs the player
-  cousin: 'Tito',           // the player's cousin, small jobs
-  dockboss: 'Chief Ibarra', // harbor boss
-  rival: 'Denny Kross',     // the rival crew leader
+const tile = (tx, ty) => ({ tx, ty });
+const toWorld = (pos) => (pos ? { x: (pos.tx + 0.5) * TILE, y: (pos.ty + 0.5) * TILE } : null);
+
+// The recurring cast — all original characters.
+export const CAST = {
+  fixer: 'Marisol Vega',
+  cousin: 'Tito',
+  dockboss: 'Chief Ibarra',
+  rival: 'Denny Kross',
 };
 
-const at = (tx, ty) => ({ tx, ty });
-
-const MISSIONS = [
+export const MISSIONS = [
   {
     id: 'm1',
     name: 'First Light',
@@ -35,8 +33,8 @@ const MISSIONS = [
     intro: `${CAST.fixer}: "Welcome to Sunset City, kid. Word is you drive fast and ask few questions. Grab a car and meet me at the plaza downtown. Don't keep me waiting."`,
     brief: 'Get any car and drive to the plaza marker in Downtown.',
     objectives: [
-      { type: 'gotoVehicle', text: 'Steal any car (E to enter)', pos: null },
-      { type: 'goto', text: 'Drive to the Downtown plaza', pos: at(46, 47), radius: 60 },
+      { type: 'gotoVehicle', text: 'Steal any car (press E)', pos: null },
+      { type: 'goto', text: 'Drive to the Downtown plaza', pos: tile(46, 47), radius: 60 },
     ],
   },
   {
@@ -48,8 +46,8 @@ const MISSIONS = [
     intro: `${CAST.cousin}: "Cousin! I owe the Mercado guys money and my knees hurt. Pick up the package in Little Mercado and bring it to my garage in Neon Row. No detours, no cops."`,
     brief: 'Pick up the package in Little Mercado, deliver it to Neon Row.',
     objectives: [
-      { type: 'goto', text: 'Collect the package in Little Mercado', pos: at(19, 48), radius: 50 },
-      { type: 'goto', text: "Deliver to Tito's garage in Neon Row", pos: at(23, 79), radius: 50 },
+      { type: 'goto', text: 'Collect the package in Little Mercado', pos: tile(19, 48), radius: 50 },
+      { type: 'goto', text: "Deliver to Tito's garage in Neon Row", pos: tile(23, 79), radius: 50 },
     ],
   },
   {
@@ -62,8 +60,8 @@ const MISSIONS = [
     brief: 'Steal the silver coupe in Palm Heights and deliver it to the Old Harbor dock.',
     specialCar: true,
     objectives: [
-      { type: 'stealCar', text: 'Steal the silver coupe in Palm Heights', pos: at(47, 19), radius: 40 },
-      { type: 'goto', text: 'Deliver the coupe to the Old Harbor dock', pos: at(78, 72), radius: 70 },
+      { type: 'stealCar', text: 'Steal the silver coupe in Palm Heights', pos: tile(47, 19), radius: 40 },
+      { type: 'goto', text: 'Deliver the coupe to the Old Harbor dock', pos: tile(78, 72), radius: 70 },
     ],
   },
   {
@@ -76,7 +74,7 @@ const MISSIONS = [
     brief: 'Timed delivery: reach the harbor gate before the clock runs out.',
     timeLimit: 95,
     objectives: [
-      { type: 'goto', text: 'Reach the harbor gate — beat the clock', pos: at(72, 88), radius: 60, timed: true },
+      { type: 'goto', text: 'Reach the harbor gate — beat the clock', pos: tile(72, 88), radius: 60, timed: true },
     ],
   },
   {
@@ -99,9 +97,9 @@ const MISSIONS = [
     reward: 1600,
     unlock: null,
     intro: `${CAST.dockboss}: "A witness is talking to us from the courthouse. Drive her van. Keep it in one piece. Kross's people would love a headline."`,
-    brief: "Escort the witness van from the courthouse to the harbor without letting it blow.",
+    brief: 'Escort the witness van from the courthouse to the harbor without letting it blow.',
     objectives: [
-      { type: 'escort', text: 'Escort the witness van to the harbor', pos: at(78, 72), radius: 70 },
+      { type: 'escort', text: 'Escort the witness van to the harbor', pos: tile(78, 72), radius: 70 },
     ],
   },
   {
@@ -113,8 +111,8 @@ const MISSIONS = [
     intro: `${CAST.cousin}: "Kross took our cut AND my stereo. His crew runs deliveries through the park at dusk. Hit their run, keep the take. I'll be at the beach thinking about my stereo."`,
     brief: 'Raid the courier run: ram and stop the courier car, then meet Tito at the beach.',
     objectives: [
-      { type: 'ramCar', text: 'Ram the courier car until it stops', pos: at(51, 77), radius: 40 },
-      { type: 'goto', text: 'Meet Tito at Sunset Beach', pos: at(84, 30), radius: 60 },
+      { type: 'ramCar', text: 'Ram the courier car until it stops', pos: tile(51, 77), radius: 40 },
+      { type: 'goto', text: 'Meet Tito at Sunset Beach', pos: tile(84, 30), radius: 60 },
     ],
   },
   {
@@ -128,49 +126,46 @@ const MISSIONS = [
     objectives: [
       { type: 'destroyCars', text: "Destroy Kross's convoy (3 cars)", count: 3 },
       { type: 'survive', text: 'Shake the police for good' },
-      { type: 'goto', text: 'Leave the life behind — drive into the sunset', pos: at(88, 20), radius: 70 },
+      { type: 'goto', text: 'Leave the life behind — drive into the sunset', pos: tile(88, 20), radius: 70 },
     ],
   },
 ];
 
-// Giver spots (tile coords) — one per mission, chained so the story walks you across the city.
+// Where each story beat is handed out; the chain walks the player across the city.
 const GIVER_SPOTS = {
-  m1: at(46, 47),
-  m2: at(23, 79),
-  m3: at(46, 47),
-  m4: at(78, 72),
-  m5: at(46, 47),
-  m6: at(78, 72),
-  m7: at(23, 79),
-  m8: at(46, 47),
+  m1: GIVER_TILE,
+  m2: tile(23, 79),
+  m3: GIVER_TILE,
+  m4: tile(78, 72),
+  m5: GIVER_TILE,
+  m6: tile(78, 72),
+  m7: tile(23, 79),
+  m8: GIVER_TILE,
 };
 
 function giverSpot(m) {
-  return GIVER_SPOTS[m.id] || at(46, 47);
+  return GIVER_SPOTS[m.id] || GIVER_TILE;
 }
 
-/** Convert a {tx, ty} tile position to world pixels. */
-function toWorld(pos) {
-  return pos ? { x: (pos.tx + 0.5) * TILE_PX, y: (pos.ty + 0.5) * TILE_PX } : null;
-}
+// ---- state ------------------------------------------------------------------
 
 export function createMissionState(player) {
   return {
     list: MISSIONS,
-    index: 0,          // next mission to offer
-    active: null,      // current mission object
-    obj: 0,            // current objective index
-    state: 'idle',     // idle | active
-    timer: 0,          // countdown for timed objectives
-    specialCar: null,  // the marked car for stealCar missions
+    index: 0,
+    active: null,
+    obj: 0,
+    state: 'idle',
+    timer: 0,
+    specialCar: null,
     escortVan: null,
     targetCars: [],
     destroyed: 0,
     completed: [],
     unlockedDistricts: [],
-    textTimer: 0,      // how long the story text stays on screen
+    textTimer: 0,
     storyText: '',
-    _player: player,
+    player,
   };
 }
 
@@ -178,17 +173,16 @@ export function currentMission(state) {
   return state.active;
 }
 
-/** Where the next mission's giver marker sits, or null when the story is finished. */
+/** World position of the next giver marker, or null once the story is finished. */
 export function missionMarker(state) {
   if (state.index >= MISSIONS.length) return null;
-  const spot = toWorld(giverSpot(MISSIONS[state.index]));
-  return { ...spot, mission: MISSIONS[state.index] };
+  const m = MISSIONS[state.index];
+  return { ...toWorld(giverSpot(m)), mission: m };
 }
 
 export function updateMissions(state, ctx, dt) {
   state.textTimer = Math.max(0, state.textTimer - dt);
 
-  // Idle: wait for the player to walk/drive into the giver marker.
   if (state.state === 'idle') {
     const marker = missionMarker(state);
     if (marker && Math.hypot(ctx.player.x - marker.x, ctx.player.y - marker.y) < 34) {
@@ -196,13 +190,12 @@ export function updateMissions(state, ctx, dt) {
     }
     return;
   }
-  if (state.state !== 'active') return;
+  if (state.state !== 'active' || !state.active) return;
 
-  const m = state.active;
-  const o = m.objectives[state.obj];
+  const o = state.active.objectives[state.obj];
+  if (!o) return;
 
-  // Timed objectives fail when the clock runs out.
-  if (o && o.timed) {
+  if (o.timed) {
     state.timer -= dt;
     if (state.timer <= 0) {
       failMission(state, ctx, 'Out of time.');
@@ -210,51 +203,54 @@ export function updateMissions(state, ctx, dt) {
     }
   }
 
-  // Objective resolution.
   const pos = toWorld(o.pos);
   switch (o.type) {
     case 'goto':
-      if (pos && Math.hypot(ctx.player.x - pos.x, ctx.player.y - pos.y) < o.radius) nextObjective(state, ctx);
+      if (pos && Math.hypot(ctx.player.x - pos.x, ctx.player.y - pos.y) < o.radius) {
+        advance(state, ctx);
+      }
       break;
     case 'gotoVehicle':
-      if (ctx.player.inVehicle) nextObjective(state, ctx);
+      if (ctx.player.inVehicle) advance(state, ctx);
       break;
     case 'stealCar':
       if (state.specialCar && ctx.player.inVehicle === state.specialCar) {
         if (ctx.onCrime) ctx.onCrime(ctx.player.x, ctx.player.y, 'carjack');
-        nextObjective(state, ctx);
+        advance(state, ctx);
       }
       break;
     case 'destroyCars':
-      if (state.destroyed >= o.count) nextObjective(state, ctx);
+      if (state.destroyed >= o.count) advance(state, ctx);
       break;
     case 'survive':
-      if (ctx.player.wanted === 0) nextObjective(state, ctx);
+      if (ctx.player.wanted === 0) advance(state, ctx);
       break;
     case 'escort': {
       const van = state.escortVan;
-      if (!van || van.exploded) { failMission(state, ctx, 'The witness van was destroyed.'); break; }
+      if (!van || van.exploded) {
+        failMission(state, ctx, 'The witness van was destroyed.');
+        break;
+      }
       if (ctx.player.inVehicle === van && pos && Math.hypot(van.x - pos.x, van.y - pos.y) < o.radius) {
-        nextObjective(state, ctx);
+        advance(state, ctx);
       }
       break;
     }
     case 'ramCar': {
       const target = state.targetCars[0];
-      if (!target || target.exploded || target.health <= 15) nextObjective(state, ctx);
+      if (!target || target.exploded || target.health <= 15) advance(state, ctx);
       break;
     }
     default:
-      nextObjective(state, ctx);
+      advance(state, ctx);
   }
 }
 
-/** The marker the HUD should point at right now (objective target or giver). */
+/** The one marker the HUD blip should track right now. */
 export function activeMarker(state) {
   if (state.state === 'active' && state.active) {
     const o = state.active.objectives[state.obj];
     if (!o) return null;
-    // Live markers track moving mission cars.
     if (o.type === 'stealCar' && state.specialCar && !state.specialCar.exploded) {
       return { x: state.specialCar.x, y: state.specialCar.y };
     }
@@ -270,7 +266,7 @@ export function activeMarker(state) {
   return null;
 }
 
-/** One-line objective text for the HUD strip. */
+/** Single line of objective text for the HUD. */
 export function objectiveText(state) {
   if (state.state === 'active' && state.active) {
     const o = state.active.objectives[state.obj];
@@ -286,24 +282,23 @@ export function objectiveText(state) {
   return '';
 }
 
-// ---- mission props -------------------------------------------------------------
+// ---- mission props -----------------------------------------------------------
 
-/** Minimal parked-car shape for mission-spawned vehicles. */
-function missionCar(x, y, angle, color, opts = {}) {
+/** A bare parked-car object with the fields traffic/collision expect. */
+function propCar(x, y, angle, color, opts = {}) {
   return {
     x, y, angle,
-    vx: 0, vy: 0, speed: 0,
+    vx: 0, vy: 0, speed: 0, lat: 0,
     color,
-    kind: 'parked',
+    role: 'parked',
     driver: null,
     health: opts.health ?? 100,
-    stopTimer: 0,
+    junctionTimer: 0,
     laneAxis: null,
-    dir: 1,
-    hornTimer: 0,
-    length: opts.length ?? 36,
-    width: opts.width ?? 16,
-    ...opts.tags,
+    laneDir: 1,
+    siren: 0,
+    exploded: false,
+    ...opts,
   };
 }
 
@@ -320,40 +315,45 @@ function startMission(state, ctx) {
   state.textTimer = 6.5;
   if (m.timeLimit) state.timer = m.timeLimit;
 
-  // Spawn the props this mission needs.
+  const find = (type) => m.objectives.find((o) => o.type === type);
+
   if (m.specialCar) {
-    const p = toWorld(m.objectives.find((o) => o.type === 'stealCar').pos);
-    state.specialCar = missionCar(p.x, p.y, Math.PI / 2, '#dcdcdc'); // the silver coupe
+    const p = toWorld(find('stealCar').pos);
+    state.specialCar = propCar(p.x, p.y, Math.PI / 2, '#dcdcdc'); // the silver coupe
     ctx.traffic.cars.push(state.specialCar);
   }
-  if (m.objectives.some((o) => o.type === 'escort')) {
-    const first = m.objectives[0];
-    const p = toWorld(first.pos || at(50, 50));
-    state.escortVan = missionCar(p.x, p.y, 0, '#e8e4da', { health: 160, length: 44, width: 20 });
+  if (find('escort')) {
+    const p = toWorld(m.objectives[0].pos || tile(50, 50));
+    state.escortVan = propCar(p.x, p.y, 0, '#e8e4da', { health: 160 });
     ctx.traffic.cars.push(state.escortVan);
   }
-  if (m.objectives.some((o) => o.type === 'destroyCars')) {
-    const n = m.objectives.find((o) => o.type === 'destroyCars').count;
-    for (let i = 0; i < n; i += 1) {
-      const car = missionCar((44 + i * 2.2) * TILE_PX, (46 + (i % 2) * 2) * TILE_PX, Math.PI / 2, '#23232a', { health: 90, tags: { crew: true } });
+  const destroy = find('destroyCars');
+  if (destroy) {
+    for (let i = 0; i < destroy.count; i += 1) {
+      const car = propCar(
+        (44 + i * 2.2) * TILE,
+        (46 + (i % 2) * 2) * TILE,
+        Math.PI / 2,
+        '#23232a',
+        { health: 90, crew: true },
+      );
       state.targetCars.push(car);
       ctx.traffic.cars.push(car);
     }
   }
-  if (m.objectives.some((o) => o.type === 'ramCar')) {
-    const p = toWorld(m.objectives.find((o) => o.type === 'ramCar').pos);
-    const car = missionCar(p.x, p.y, 0, '#c9a24a', { health: 60, tags: { courier: true } });
+  const ram = find('ramCar');
+  if (ram) {
+    const p = toWorld(ram.pos);
+    const car = propCar(p.x, p.y, 0, '#c9a24a', { health: 60, courier: true });
     state.targetCars.push(car);
     ctx.traffic.cars.push(car);
   }
   if (ctx.audio) ctx.audio.jingle();
 }
 
-function nextObjective(state, ctx) {
+function advance(state, ctx) {
   state.obj += 1;
-  if (state.obj >= state.active.objectives.length) {
-    completeMission(state, ctx);
-  }
+  if (state.obj >= state.active.objectives.length) completeMission(state, ctx);
 }
 
 export function completeMission(state, ctx) {
@@ -362,9 +362,14 @@ export function completeMission(state, ctx) {
   state.index += 1;
   state.state = 'idle';
   state.active = null;
-  state.storyText = `MISSION COMPLETE — ${m.name}\n$${m.reward} earned. ${state.index < MISSIONS.length ? `Next: ${MISSIONS[state.index].name} — find the new marker.` : 'The city is yours. Thanks for playing.'}`;
+  const next = state.index < MISSIONS.length
+    ? `Next: ${MISSIONS[state.index].name} — find the new marker.`
+    : 'The city is yours. Thanks for playing.';
+  state.storyText = `MISSION COMPLETE — ${m.name}\n$${m.reward} earned. ${next}`;
   state.textTimer = 7;
-  if (m.unlock && !state.unlockedDistricts.includes(m.unlock)) state.unlockedDistricts.push(m.unlock);
+  if (m.unlock && !state.unlockedDistricts.includes(m.unlock)) {
+    state.unlockedDistricts.push(m.unlock);
+  }
   ctx.player.cash += m.reward;
   if (ctx.audio) ctx.audio.jingle();
   if (ctx.onMissionEvent) ctx.onMissionEvent();
@@ -379,11 +384,9 @@ export function failMission(state, ctx, reason) {
   if (ctx.audio) ctx.audio.fail();
 }
 
-/** Called by combat when a mission-tagged car dies. */
+/** Combat calls this whenever a car dies; mission-tagged cars feed their counters. */
 export function onMissionCarDestroyed(state, car) {
   if (state.state !== 'active') return;
   if (state.targetCars.includes(car)) state.destroyed += 1;
-  if (state.specialCar === car) state.specialCar = null; // stole it and wrecked it: steal fails softly
+  if (state.specialCar === car) state.specialCar = null;
 }
-
-export { MISSIONS, CAST };

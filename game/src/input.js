@@ -1,92 +1,95 @@
-// Keyboard + mouse input.
+// Input handling: keyboard + mouse.
 //
-// Held keys live in a Set of lowercase `KeyboardEvent.code` values. Edge-triggered presses are
-// queued separately and drained once per simulation step (`consume`), so a tap that happens
-// between two frames is never lost. The mouse position is tracked in canvas (CSS) pixels; the
-// main loop converts it to world pixels with the camera transform.
+// Held keys sit in a Set of `event.code` strings (lowercased). Presses that happen
+// between simulation steps are buffered in a second Set and drained by consume(),
+// so quick taps are never missed even at low frame rates. Mouse position is stored
+// in canvas-space pixels; main.js turns it into world coordinates via the camera.
 
-const MOVE_CODES = new Set([
-  'keyw', 'keys', 'keya', 'keyd',
-  'arrowup', 'arrowdown', 'arrowleft', 'arrowright',
-]);
+const MOVEMENT = ['keyw', 'keya', 'keys', 'keyd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'];
 
-// Only these keys are tracked at all — anything else (browser shortcuts, typing) is ignored.
-const BOUND_CODES = new Set([
-  ...MOVE_CODES,
-  'space', 'keye', 'keyf', 'keym', 'keyq', 'enter', 'f5', 'f9',
+// Everything the game listens for; other keys fall through to the browser.
+const TRACKED = new Set([
+  ...MOVEMENT,
+  'space', 'enter', 'keye', 'keyf', 'keym', 'keyq', 'f5', 'f9',
   'shiftleft', 'shiftright', 'digit1', 'digit2', 'digit3',
 ]);
 
-// Keys the page itself uses; stop the browser from scrolling or reloading on them.
-function shouldPreventDefault(code) {
-  return code === 'space' || code === 'f5' || MOVE_CODES.has(code);
-}
+const SCROLLERS = new Set([...MOVEMENT, 'space']);
 
 export function createInput(canvas) {
-  const down = new Set();     // currently held
-  const pressed = new Set();  // pressed since the last consume()
-  const mouse = { x: 0, y: 0, down: false, clicked: false };
+  const held = new Set();
+  const tapped = new Set();
+  const mouse = { x: 0, y: 0, button: false, click: false };
 
-  function trackMouse(e) {
-    const rect = canvas.getBoundingClientRect();
-    mouse.x = e.clientX - rect.left;
-    mouse.y = e.clientY - rect.top;
-  }
-
-  function onKey(e, isDown) {
-    const code = e.code.toLowerCase();
-    if (!BOUND_CODES.has(code)) return;
-    if (shouldPreventDefault(code) && e.preventDefault) e.preventDefault();
-    if (!isDown) {
-      down.delete(code);
-      return;
-    }
-    // Ignore auto-repeat: a key that is already held is not a new press.
-    if (!down.has(code)) pressed.add(code);
-    down.add(code);
-  }
-
-  const handlers = {
-    keydown: (e) => onKey(e, true),
-    keyup: (e) => onKey(e, false),
-    mousemove: trackMouse,
-    mouseup: () => { mouse.down = false; },
-    blur: () => { down.clear(); mouse.down = false; },  // don't leave keys stuck on tab-away
+  const updateMouse = (e) => {
+    const r = canvas.getBoundingClientRect();
+    mouse.x = e.clientX - r.left;
+    mouse.y = e.clientY - r.top;
   };
 
-  window.addEventListener('keydown', handlers.keydown);
-  window.addEventListener('keyup', handlers.keyup);
-  window.addEventListener('mousemove', handlers.mousemove);
-  window.addEventListener('mouseup', handlers.mouseup);
-  window.addEventListener('blur', handlers.blur);
+  const handleKey = (e, wentDown) => {
+    const code = (e.code || '').toLowerCase();
+    if (!TRACKED.has(code)) return;
+    if (wentDown && SCROLLERS.has(code) && e.preventDefault) e.preventDefault();
+    if (wentDown) {
+      if (!held.has(code)) tapped.add(code);
+      held.add(code);
+    } else {
+      held.delete(code);
+    }
+  };
 
-  canvas.addEventListener('mousedown', (e) => {
-    trackMouse(e);
-    mouse.down = true;
-    mouse.clicked = true;
+  const onKeyDown = (e) => handleKey(e, true);
+  const onKeyUp = (e) => handleKey(e, false);
+  const onMove = (e) => updateMouse(e);
+  const onUp = () => { mouse.button = false; };
+  const onBlur = () => {
+    held.clear();
+    mouse.button = false;
+  };
+  const onDown = (e) => {
+    updateMouse(e);
+    mouse.button = true;
+    mouse.click = true;
     if (e.preventDefault) e.preventDefault();
-  });
-  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  };
+  const noMenu = (e) => e.preventDefault();
+
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+  window.addEventListener('blur', onBlur);
+  canvas.addEventListener('mousedown', onDown);
+  canvas.addEventListener('contextmenu', noMenu);
 
   return {
-    down,
+    held,
     mouse,
-    isDown(code) { return down.has(code.toLowerCase()); },
-    pressed(code) { return pressed.has(code.toLowerCase()); },
 
-    /** Movement axes in [-1, 1]; both WASD and the arrow keys work. */
-    axes() {
-      const right = this.isDown('keyd') || this.isDown('arrowright') ? 1 : 0;
-      const left = this.isDown('keya') || this.isDown('arrowleft') ? 1 : 0;
-      const downKey = this.isDown('keys') || this.isDown('arrowdown') ? 1 : 0;
-      const up = this.isDown('keyw') || this.isDown('arrowup') ? 1 : 0;
-      return { x: right - left, y: downKey - up };
+    isDown(code) {
+      return held.has(String(code).toLowerCase());
     },
 
-    /** True while either shift key is held (on-foot sprint). */
-    running() { return this.isDown('shiftleft') || this.isDown('shiftright'); },
+    wasPressed(code) {
+      return tapped.has(String(code).toLowerCase());
+    },
 
-    /** Clear per-frame edge state; call once after each simulation step. */
-    consume() { pressed.clear(); mouse.clicked = false; },
+    axes() {
+      const x = (this.isDown('keyd') || this.isDown('arrowright') ? 1 : 0)
+        - (this.isDown('keya') || this.isDown('arrowleft') ? 1 : 0);
+      const y = (this.isDown('keys') || this.isDown('arrowdown') ? 1 : 0)
+        - (this.isDown('keyw') || this.isDown('arrowup') ? 1 : 0);
+      return { x, y };
+    },
+
+    sprinting() {
+      return this.isDown('shiftleft') || this.isDown('shiftright');
+    },
+
+    consume() {
+      tapped.clear();
+      mouse.click = false;
+    },
   };
 }

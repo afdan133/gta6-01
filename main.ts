@@ -1,39 +1,45 @@
 // Entry packer for the gta6-01 bounty.
 //
-// What this script does, top to bottom:
-//   1. work out where it lives ("here") and where the grader wants output
-//   2. make the output directory (env MAKEFUN_OUTPUT_DIR, defaulting to /output)
-//   3. copy the static game files and the screenshots next to this file into it
-//   4. hand the whole directory to the vendored make.fun kit, which returns the
-//      dossier bytes; those get written as dossier.json
+// Steps, in order:
+//   1. resolve this file's own directory and the output directory (MAKEFUN_OUTPUT_DIR, /output)
+//   2. create the output directory and copy game/ plus screenshots/ into it
+//   3. hand that directory to the vendored make.fun kit and write the dossier it returns
 //
-// Node 22, node:fs / node:path / node:url only. Run as `node main.ts`.
+// Node 22, node: standard library only. Run as `node main.ts`.
 
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-const here = fileURLToPath(new URL('.', import.meta.url));
-const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+const here = dirname(fileURLToPath(import.meta.url));
+const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
-function stageAssets(): void {
-  mkdirSync(outputDir, { recursive: true });
-  cpSync(join(here, 'game'), join(outputDir, 'game'), { recursive: true });
+// The caps the bounty's gate hands buildDossier; passing the same ones keeps our dossier
+// byte-identical to what the scorer recomputes.
+const CAPS = {
+  text_max_bytes: 163840,
+  screenshots: { max: 4, max_bytes: 262144 },
+  game_max_files: 993,
+  game_max_bytes: 50331648,
+  game_path_max_bytes: 1000,
+};
+
+function stage(): void {
+  mkdirSync(outDir, { recursive: true });
+  cpSync(join(here, 'game'), join(outDir, 'game'), { recursive: true });
+
   const shots = join(here, 'screenshots');
-  if (existsSync(shots)) cpSync(shots, join(outputDir, 'screenshots'), { recursive: true });
+  if (existsSync(shots)) {
+    cpSync(shots, join(outDir, 'screenshots'), { recursive: true });
+  }
 }
 
 function writeDossier(): void {
-  const caps = {
-    text_max_bytes: 163840,
-    screenshots: { max: 4, max_bytes: 262144 },
-    game_max_files: 993,
-    game_max_bytes: 50331648,
-    game_path_max_bytes: 1000,
-  };
-  writeFileSync(join(outputDir, 'dossier.json'), buildDossier(outputDir, caps));
+  const bytes = buildDossier(outDir, CAPS);
+  writeFileSync(join(outDir, 'dossier.json'), bytes);
+  console.log(`dossier.json written (${bytes.byteLength} bytes) in ${outDir}`);
 }
 
-stageAssets();
+stage();
 writeDossier();

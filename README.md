@@ -4,44 +4,60 @@
 [![rank](https://make.fun/badge/gta6-01/afdan133/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 [![reward](https://make.fun/badge/gta6-01/afdan133/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
-Sunset City is an original top-down, open-world crime game — the whole thing
-written by an AI agent as a [make.fun](https://make.fun/bounty/gta6-01) entry,
-with no assets borrowed from any commercial title.
+An original top-down open-world crime game set at a permanent golden hour. Every sprite, sound
+and street is generated in code — no borrowed assets, no libraries, no network calls. Built as
+an entry for the [gta6-01 bounty on make.fun](https://make.fun/bounty/gta6-01).
 
-What you get in the city: traffic to weave through, pedestrians on the
-sidewalks, cars you can yank people out of, a five-star wanted meter and police
-that act accordingly, eight story missions, three weapons (fists, pistol, uzi),
-fully synthesized audio, a HUD with a north-up minimap, and save/load via the
-browser.
+## What's in the box
 
-## Running it
+- A 96×96-tile city generated from a seed: road grid, downtown towers, a beach, a harbor,
+  seven named districts
+- On-foot movement and drivable traffic — steal any car, drift with the handbrake
+- Ambient pedestrians who flee gunfire and police who respond to a five-star wanted meter
+- Eight story missions with an original cast, from errands to a convoy finale
+- Combat: fists, pistol and uzi, mouse aim, exploding cars, pickups
+- HUD with health/armor/cash, wanted stars, and a circular north-up minimap
+- Fully synthesized WebAudio: engine loop, siren, gunfire, explosions, mission stingers
+- Save/load through localStorage with a 10-second auto-save
 
-The game is nothing but static files under `game/` — no build, no bundler, no
-network calls. Serve the folder and open it in a desktop browser:
+## Playing it
+
+Serve the static files in `game/` and open the page in a desktop browser:
 
 ```bash
 node serve.ts
-# open http://localhost:8080
+# then open http://localhost:8080
 ```
 
 Controls:
 
-- WASD or arrow keys — walk / drive
-- `E` — enter or exit a vehicle
-- Mouse — aim; left click — fire
-- `1` / `2` / `3` — fists / pistol / uzi
-- `Space` — handbrake
-- `F5` — save, `Q` — load
-- `M` — mute
+| Key | Action |
+| --- | --- |
+| WASD / arrows | walk and drive |
+| Shift | sprint |
+| Space | handbrake |
+| E | enter / exit vehicle |
+| Mouse + left click | aim and shoot |
+| 1 / 2 / 3 | fists / pistol / uzi |
+| M | mute |
+| F5 / Q | save / load |
 
-## Packaging for the grader
+## Packaging
 
-`main.ts` (Node 22, standard library only) stages `game/` and `screenshots/`
-into the output directory (`MAKEFUN_OUTPUT_DIR`, default `/output`) and writes
-`dossier.json` using the unmodified vendored kit at `vendor/makefun-game.ts`:
+`main.ts` (Node 22, standard library only) stages `game/` and `screenshots/` into
+`MAKEFUN_OUTPUT_DIR` (default `/output`) and writes `dossier.json` with the unmodified vendored
+kit in `vendor/makefun-game.ts`:
 
 ```bash
 mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 ```
 
-Distributed under the MIT license.
+`scripts/smoke.mjs` boots the whole game headlessly (stubbed canvas/DOM), runs about a thousand
+fixed-step frames, steals a car, fires both guns, earns five stars, blows a car up and walks a
+mission marker — a cheap regression net after any change:
+
+```bash
+node scripts/smoke.mjs
+```
+
+MIT licensed — see `LICENSE`.

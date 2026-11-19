@@ -1,52 +1,47 @@
-// Ambient traffic and pedestrians.
+// Ambient traffic and crowds.
 //
-// Traffic cars cruise the road grid in lanes, slow near intersections, occasionally pause at a
-// "light", brake for the player, and recycle back into view when they drift far from the action.
-// Peds spawn on sidewalks and the beach and wander; a `panic` event (gunfire, near-miss) sends
-// everyone within its radius running.
+// Traffic cars cruise the road grid in right-hand lanes, ease down near junctions, sometimes
+// sit at a "light", brake for whatever the player is driving, and respawn near the player once
+// they fall far behind. Peds live on sidewalks and the beach; a panic event (gunshots, a car
+// ploughing the curb) sends everyone nearby running.
 
-import {
-  PAL, PED, ROAD_GAP, ROAD_W, TILE, TRAFFIC_CARS, VEHICLE, WORLD_H, WORLD_W,
-} from './config.js';
-import { laneCenter, T_SAND, T_SIDEWALK } from './city.js';
+import { PAL, PED, ROAD_GAP, ROAD_WIDE, TILE, TRAFFIC_CARS, VEHICLE, WORLD_H, WORLD_W } from './config.js';
+import { BAND_PX, T_SAND, T_WALK, laneCenter } from './city.js';
 import { createPed, createVehicle, updatePed, updateVehicle } from './entities.js';
 
-const ROAD_BAND = ROAD_GAP * TILE;
-const BAND_COUNT = Math.floor(WORLD_H / ROAD_BAND);
+const BANDS = Math.floor(WORLD_H / BAND_PX);
 
-/** Position along a lane centre for one of the two lanes (offset a full tile from centre). */
-function laneCoordinate(band, laneOffset) {
-  return band * ROAD_BAND + (ROAD_W / 2) * TILE + laneOffset;
+// Right-hand traffic: lane centre sits one tile off the band centre, side depends on direction.
+function laneCoord(band, dir) {
+  return band * BAND_PX + (ROAD_WIDE / 2) * TILE + dir * TILE;
 }
 
-function spawnTrafficCar(city, rng, near, out) {
-  // Try a handful of random road spots; `near` (optional) keeps respawns around the player.
-  for (let i = 0; i < 40; i += 1) {
-    const horizontal = rng.chance(0.5);
-    const laneOffset = rng.chance(0.5) ? TILE : -TILE; // right-hand lane by direction
-    const band = rng.int(0, BAND_COUNT - 1);
-    const dir = laneOffset < 0 ? -1 : 1;
+function trySpawnCar(city, rng, anchor, push) {
+  for (let tries = 0; tries < 40; tries += 1) {
+    const horiz = rng.chance(0.5);
+    const dir = rng.chance(0.5) ? 1 : -1;
+    const band = rng.int(0, BANDS - 1);
     let x;
     let y;
-    if (horizontal) {
-      y = laneCoordinate(band, laneOffset);
-      x = near ? near.x + rng.range(-1000, 1000) : rng.range(TILE * 4, WORLD_W - TILE * 4);
+    if (horiz) {
+      y = laneCoord(band, dir);
+      x = anchor ? anchor.x + rng.range(-1000, 1000) : rng.range(TILE * 4, WORLD_W - TILE * 4);
       if (x < TILE * 2 || x > WORLD_W - TILE * 2 || !city.isRoad(x, y)) continue;
     } else {
-      x = laneCoordinate(band, laneOffset);
-      y = near ? near.y + rng.range(-1000, 1000) : rng.range(TILE * 4, WORLD_H - TILE * 4);
+      x = laneCoord(band, dir);
+      y = anchor ? anchor.y + rng.range(-1000, 1000) : rng.range(TILE * 4, WORLD_H - TILE * 4);
       if (y < TILE * 2 || y > WORLD_H - TILE * 2 || !city.isRoad(x, y)) continue;
     }
     const v = createVehicle(
       x, y,
-      horizontal ? (dir > 0 ? 0 : Math.PI) : (dir > 0 ? Math.PI / 2 : -Math.PI / 2),
+      horiz ? (dir > 0 ? 0 : Math.PI) : (dir > 0 ? Math.PI / 2 : -Math.PI / 2),
       rng, PAL.carColors, 'traffic',
     );
     v.speed = VEHICLE.trafficSpeed;
-    v.forwardSpeed = VEHICLE.trafficSpeed;
-    v.laneAxis = horizontal ? 'h' : 'v';
-    v.dir = dir;
-    out(v);
+    v.cruise = VEHICLE.trafficSpeed;
+    v.laneAxis = horiz ? 'h' : 'v';
+    v.laneDir = dir;
+    push(v);
     return true;
   }
   return false;
@@ -56,14 +51,13 @@ export function createTraffic(city, rng) {
   const cars = [];
   const peds = [];
 
-  // Traffic cars on the road grid.
-  let attempts = 0;
-  while (cars.length < TRAFFIC_CARS && attempts < 800) {
-    attempts += 1;
-    spawnTrafficCar(city, rng, null, (v) => cars.push(v));
+  let budget = 800;
+  while (cars.length < TRAFFIC_CARS && budget > 0) {
+    budget -= 1;
+    trySpawnCar(city, rng, null, (v) => cars.push(v));
   }
 
-  // Parked cars inside the harbor lots.
+  // A few parked cars in each harbor lot.
   for (const lot of city.lots) {
     const n = rng.int(2, 5);
     for (let i = 0; i < n; i += 1) {
@@ -73,14 +67,13 @@ export function createTraffic(city, rng) {
     }
   }
 
-  // Peds on sidewalks and the beach.
-  attempts = 0;
-  while (peds.length < PED.count && attempts < 3000) {
-    attempts += 1;
+  budget = 3000;
+  while (peds.length < PED.count && budget > 0) {
+    budget -= 1;
     const x = rng.range(0, WORLD_W);
     const y = rng.range(0, WORLD_H);
     const t = city.tileAt(x, y);
-    if (t !== T_SIDEWALK && t !== T_SAND) continue;
+    if (t !== T_WALK && t !== T_SAND) continue;
     peds.push(createPed(x, y, rng, PAL.pedShirts, PAL.pedPants));
   }
 
@@ -88,84 +81,79 @@ export function createTraffic(city, rng) {
 }
 
 /**
- * Advance all traffic and peds.
- * panic: {x, y, radius} or null — peds inside the radius start fleeing.
- * playerCar: the vehicle the player is driving (traffic brakes for it), or null.
- * rng: the game's seeded RNG, used for respawns; defaults to Math.
+ * Step the whole street scene.
+ * panic  — {x, y, radius} or null; peds inside flee the point.
+ * myCar  — the car the player is driving, or null on foot.
+ * rng    — seeded RNG used for respawns.
  */
-export function updateTraffic(traffic, city, dt, panic, playerCar, rng = Math) {
-  const { cars, peds } = traffic;
+export function updateTraffic(scene, city, dt, panic, myCar, rng = Math) {
+  const { cars, peds } = scene;
 
   for (const c of cars) {
-    if (c.kind === 'parked' || c.driver === 'player') continue; // player physics handled in entities
+    if (c.role === 'parked' || c.driver === 'player' || c.exploded) continue;
 
-    // Pausing at an intersection: coast to a stop, then wait out the timer.
-    if (c.stopTimer > 0) {
-      c.stopTimer -= dt;
+    // Sitting out a junction timer: coast to a halt.
+    if (c.junctionTimer > 0) {
+      c.junctionTimer -= dt;
       c.speed *= Math.max(0, 1 - 6 * dt);
       updateVehicle(c, 0, 0, false, dt, city);
       continue;
     }
 
-    // Target speed: cruise, halved near intersections, clamped when the player is ahead.
+    // Cruise speed, halved when crossing an intersection.
     const along = c.laneAxis === 'h' ? c.x : c.y;
-    const bandPos = along % ROAD_BAND;
-    const nearIntersection = bandPos < TILE * 2 || bandPos > ROAD_BAND - TILE * 2;
-    let target = c.forwardSpeed ?? VEHICLE.trafficSpeed;
-    if (nearIntersection) target *= 0.45;
+    const inBand = along % BAND_PX;
+    const nearJunction = inBand < TILE * 2 || inBand > BAND_PX - TILE * 2;
+    let target = c.cruise ?? VEHICLE.trafficSpeed;
+    if (nearJunction) target *= 0.45;
 
-    if (playerCar) {
-      const dx = playerCar.x - c.x;
-      const dy = playerCar.y - c.y;
-      const dist = Math.hypot(dx, dy);
-      if (dist < 90) {
-        // Is the player roughly ahead of us in our travel direction?
-        if (dx * Math.cos(c.angle) + dy * Math.sin(c.angle) > 0) target = Math.min(target, dist * 0.8);
+    // Brake for the player's car when it sits ahead of us.
+    if (myCar && !myCar.exploded) {
+      const dx = myCar.x - c.x;
+      const dy = myCar.y - c.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 90) {
+        const ahead = dx * Math.cos(c.angle) + dy * Math.sin(c.angle);
+        if (ahead > 0) target = Math.min(target, d * 0.8);
       }
     }
-    // Ease speed toward the target (asymmetric: brake faster than accelerate).
+    // Ease toward target speed; braking is snappier than accelerating.
     c.speed += Math.max(-300 * dt, Math.min(200 * dt, target - c.speed));
 
-    // Lane keeping: steer gently back to this lane's centre line.
-    const laneRef = c.laneAxis === 'h' ? c.y : c.x;
-    const want = laneCenter(laneRef - c.dir * TILE) + c.dir * TILE;
+    // Gentle lane keeping back onto this lane's centre line.
+    const ref = c.laneAxis === 'h' ? c.y : c.x;
+    const want = laneCenter(ref - c.laneDir * TILE) + c.laneDir * TILE;
     const lateral = c.laneAxis === 'h' ? c.y - want : c.x - want;
-    const steer = Math.max(-1, Math.min(1, lateral * 0.01 * c.dir));
+    const steer = Math.max(-1, Math.min(1, lateral * 0.01 * c.laneDir));
     updateVehicle(c, c.speed > 0 ? 0.3 : 0, steer, false, dt, city);
 
-    // Occasional red-light stop when crossing an intersection.
-    if (nearIntersection && Math.random() < 0.004) c.stopTimer = VEHICLE.stopTime;
-    if (c.hornTimer > 0) c.hornTimer -= dt;
+    // Rare junction stop, like catching a red light.
+    if (nearJunction && Math.random() < 0.004) c.junctionTimer = VEHICLE.junctionPause;
+    if (c.siren > 0) c.siren -= dt;
   }
 
-  // Peds: scare them with panic events, then let them act.
   for (const p of peds) {
-    if (panic && p.state !== 'flee') {
+    if (panic && p.mode !== 'panic') {
       const d = Math.hypot(p.x - panic.x, p.y - panic.y);
       if (d < panic.radius) {
-        p.state = 'flee';
-        p.timer = 4 + Math.random() * 3;
+        p.mode = 'panic';
+        p.think = 4 + Math.random() * 3;
       }
     }
     updatePed(p, city, dt, panic ?? { x: p.x, y: p.y });
   }
 
-  // Recycle: traffic that drifts too far from the player respawns on a road nearby,
-  // so streets always look alive no matter where the player goes.
-  if (playerCar) {
+  // Far-away traffic respawns near the player so streets stay busy anywhere in the map.
+  if (myCar) {
     for (const c of cars) {
-      if (c.kind !== 'traffic' || c.driver === 'player') continue;
-      if (Math.hypot(c.x - playerCar.x, c.y - playerCar.y) > 1400) {
-        spawnTrafficCar(city, rng, playerCar, (v) => Object.assign(c, v));
+      if (c.role !== 'traffic' || c.driver === 'player') continue;
+      if (Math.hypot(c.x - myCar.x, c.y - myCar.y) > 1400) {
+        trySpawnCar(city, rng, myCar, (v) => Object.assign(c, v));
       }
     }
   }
 }
 
-/**
- * Build a panic event at a world point. The returned object is passed to updateTraffic;
- * peds inside `radius` flee the point for a few seconds.
- */
 export function panicAt(x, y, radius = 220) {
   return { x, y, radius };
 }
