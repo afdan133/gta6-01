@@ -3,7 +3,8 @@
 // presses are queued and consumed once per frame so a press between frames is never lost.
 
 const MOVE_CODES = new Set(['keyw', 'keys', 'keya', 'keyd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright']);
-const INTERESTING = new Set([...MOVE_CODES, 'space', 'keye', 'keyf', 'keym', 'f5', 'enter', 'keyq']);
+const INTERESTING = new Set([...MOVE_CODES, 'space', 'keye', 'keyf', 'keym', 'f5', 'f9', 'enter', 'keyq',
+  'digit1', 'digit2', 'digit3']);
 
 export function createInput(canvas) {
   const down = new Set();

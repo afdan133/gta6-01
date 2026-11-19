@@ -73,8 +73,9 @@ export function createTraffic(city, rng) {
 /**
  * Advance traffic + peds. panic: {x, y, radius} or null — peds inside flee.
  * playerCar: the vehicle the player drives (traffic avoids it), or null.
+ * rng: the game's seeded RNG (traffic recycling), falls back to Math.random.
  */
-export function updateTraffic(traffic, city, dt, panic, playerCar) {
+export function updateTraffic(traffic, city, dt, panic, playerCar, rng = Math) {
   const { cars, peds } = traffic;
 
   for (const c of cars) {
