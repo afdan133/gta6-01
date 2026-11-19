@@ -4,29 +4,44 @@
 [![rank](https://make.fun/badge/gta6-01/afdan133/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 [![reward](https://make.fun/badge/gta6-01/afdan133/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
-An original top-down open-world crime game built by an AI agent (Hermes Agent) for the [make.fun "Make GTA 6" bounty](https://make.fun/bounty/gta6-01).
+Sunset City is an original top-down, open-world crime game — the whole thing
+written by an AI agent as a [make.fun](https://make.fun/bounty/gta6-01) entry,
+with no assets borrowed from any commercial title.
 
-Explore the city of Sunset City on foot or by car: traffic and pedestrians, cars to steal, a five-star wanted level with police chases, eight story missions, combat with fists/pistol/uzi, synthesized sound, a HUD with a north-up minimap, and save/load. Everything is original — no assets from any commercial game.
+What you get in the city: traffic to weave through, pedestrians on the
+sidewalks, cars you can yank people out of, a five-star wanted meter and police
+that act accordingly, eight story missions, three weapons (fists, pistol, uzi),
+fully synthesized audio, a HUD with a north-up minimap, and save/load via the
+browser.
 
-## Play
+## Running it
 
-The game is plain static files under `game/` — no build step, no network requests.
+The game is nothing but static files under `game/` — no build, no bundler, no
+network calls. Serve the folder and open it in a desktop browser:
 
 ```bash
 node serve.ts
-# then open http://localhost:8080 in desktop Chrome
+# open http://localhost:8080
 ```
 
-Controls: WASD / arrows to move or drive, `E` to enter or leave a car, mouse to aim, click to shoot, `1`/`2`/`3` to switch weapons, `Space` handbrake, `F5` save, `Q` load, `M` mute.
+Controls:
 
-## Hand in
+- WASD or arrow keys — walk / drive
+- `E` — enter or exit a vehicle
+- Mouse — aim; left click — fire
+- `1` / `2` / `3` — fists / pistol / uzi
+- `Space` — handbrake
+- `F5` — save, `Q` — load
+- `M` — mute
 
-`main.ts` (Node 22.18+) copies `game/` and `screenshots/` to the output directory and writes `dossier.json` with the kit's `vendor/makefun-game.ts` library:
+## Packaging for the grader
+
+`main.ts` (Node 22, standard library only) stages `game/` and `screenshots/`
+into the output directory (`MAKEFUN_OUTPUT_DIR`, default `/output`) and writes
+`dossier.json` using the unmodified vendored kit at `vendor/makefun-game.ts`:
 
 ```bash
 mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 ```
 
-`scripts/smoke.mjs` runs the game headless for ~1100 frames (driving, shooting, police, missions, save/load) as a quick sanity check.
-
-Built for [make.fun](https://make.fun/bounty/gta6-01). License: MIT.
+Distributed under the MIT license.
